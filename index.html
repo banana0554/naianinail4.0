@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>nainai nail 預約系統 (雙模式版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+    
+    <style>
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideDownAlert { from { opacity: 0; transform: translate(-50%, -20px); } to { opacity: 1; transform: translate(-50%, 0); } }
+        .animate-fadeIn { animation: fadeIn 0.4s ease-out; }
+        .animate-slideUp { animation: slideUp 0.4s ease-out; }
+    </style>
+</head>
+<body class="bg-[#F8DEE5]">
+    <div id="root"></div>
+
+    <script>
+        // 預防 Firebase 載入失敗的防呆機制
+        window.db = null;
+        window.auth = null;
+        window.isCloudEnabled = false;
+        window.firebaseFunctions = {};
+
+        // 覆寫預設的 alert，改用好看的自訂提示框
+        window.alert = function(message) {
+            const alertBox = document.createElement('div');
+            alertBox.style.cssText = `
+                position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+                background-color: rgba(99, 70, 77, 0.95); color: white;
+                padding: 16px 24px; border-radius: 12px; z-index: 99999;
+                font-weight: bold; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                animation: slideDownAlert 0.3s ease-out; max-width: 80%; text-align: center;
+                white-space: pre-wrap;
+            `;
+            alertBox.innerText = message;
+            document.body.appendChild(alertBox);
+            setTimeout(() => {
+                alertBox.style.opacity = '0';
+                alertBox.style.transition = 'opacity 0.3s ease-out';
+                setTimeout(() => document.body.removeChild(alertBox), 300);
+            }, 3500);
+        };
+
+        // 預覽環境安全的剪貼簿複製功能
+        window.fallbackCopyTextToClipboard = function(text) {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            textArea.style.opacity = "0";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+            } catch (err) {
+                console.error('複製失敗', err);
+            }
+            document.body.removeChild(textArea);
+        };
+    </script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAqvJjN0FrL5Cu3c6ijC2lQ594rMojSjdU",
+            authDomain: "nainainail.firebaseapp.com",
+            projectId: "nainainail",
+            storageBucket: "nainainail.firebasestorage.app",
+            messagingSenderId: "3869474467",
+            appId: "1:3869474467:web:9581f5a36aee467e920916",
+            measurementId: "G-0LHTJ6MLVS"
+        };
+
+        let db = null;
+        let auth = null;
+        let isCloudEnabled = false;
+
+        if (firebaseConfig.apiKey) {
+            try {
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                isCloudEnabled = true;
+                console.log("✅ Firebase 連線成功，啟用雲端同步模式");
+            } catch (e) {
+                console.error("Firebase 初始化失敗:", e);
+            }
+        } else {
+            console.warn("⚠️ 未偵測到 Firebase 設定，將使用 LocalStorage (僅限本機儲存)");
+        }
+
+        window.db = db;
+        window.auth = auth;
+        window.isCloudEnabled = isCloudEnabled;
+        window.firebaseFunctions = { signInAnonymously, onAuthStateChanged, doc, setDoc, onSnapshot };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- 圖示組件 ---
+        const Sparkles = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M9 3v4"/><path d="M3 9h4"/><path d="M3 5h4"/></svg>);
+        const Check = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="20 6 9 17 4 12"/></svg>);
+        const ChevronLeft = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="m15 18-6-6 6-6"/></svg>);
+        const ChevronRight = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="m9 18 6-6-6-6"/></svg>);
+        const ChevronDown = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="m6 9 6 6 6-6"/></svg>);
+        const Heart = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>);
+        const Star = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>);
+        const Palette = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>);
+        const Hand = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>);
+        const Plus = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M5 12h14"/><path d="M12 5v14"/></svg>);
+        const Minus = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M5 12h14"/></svg>);
+        const Phone = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.05 12.05 0 0 0 .57 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.03 12.03 0 0 0 2.81.57 2 2 0 0 1 1.72 2.05z"/></svg>);
+        const MapPin = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>);
+        const Lock = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>);
+        const XCircle = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>);
+        const Cloud = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M17.5 19c0-3.037-2.463-5.5-5.5-5.5S6.5 15.963 6.5 19"/><path d="M14.5 13.5c0-2.485-2.015-4.5-4.5-4.5s-4.5 2.015-4.5 4.5"/><path d="M12 9c0-1.657-1.343-3-3-3S6 7.343 6 9"/><path d="M22 19a3 3 0 0 0-3-3h-1.5"/><path d="M5.5 16A3.5 3.5 0 0 0 2 19"/></svg>);
+        const CloudOff = (props) => (<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"/><line x1="1" x2="23" y1="1" y2="23"/></svg>);
+
+        const COLORS = {
+            primary: '#D48594', background: '#FCECF0', card_bg: '#FFFFFF', text: '#63464D', accent: '#EBB3BE', white: '#FFFFFF', disabled: '#E5E5E5', admin: '#708090'
+        };
+
+        const SERVICES_DATA = [
+            {
+                category: "美甲服務",
+                icon: Star,
+                items: [
+                    { id: 'b1', name: '手部', price: 0, desc: '' },                    
+                    { id: 'b2', name: '足部', price: 0, desc: '' },
+                    { id: 'b3', name: '單色凝膠', price: 900, time: '90分鐘', desc: '含基礎保養' },
+                    { id: 'b4', name: '貓眼凝膠', price: 1100, time: '100分鐘', desc: '含基礎保養' },
+                    { id: 'b5', name: '漸層/法式/鏡面', price: 1200, time: '120分鐘', desc: '含基礎保養' },
+                    { id: 'b6', name: '跳一色 (+1)', price: 50, allowQuantity: true, desc: '每指' },
+                    { id: 'b7', name: '延甲 (+1)', price: 100, desc: '每指', allowQuantity: true },
+                    { id: 'b8', name: '補甲 (+1)', price: 100, desc: '每指', allowQuantity: true },
+                ]
+            },
+            {
+                category: "造型設計",
+                icon: Palette,
+                items: [
+                    { id: 'd1', name: '造型款 A (簡約)', price: 1200, time: '120分鐘', desc: '1200元起' },
+                    { id: 'd2', name: '造型款 B (華麗)', price: 1700, time: '150分鐘', desc: '1700元起' },
+                    { id: 'd3', name: '客製造型(傳圖報價)', price: 1200, time: '150分鐘', desc: '1200元起' },
+                ]
+            },
+            {
+                category: "保養與卸甲",
+                icon: Hand,
+                items: [
+                    { id: 'c1', name: '基礎保養(手部)', price: 300, time: '30分鐘', desc: '修型+甘皮處理+指緣油' },
+                    { id: 'c2', name: '基礎保養(足部)', price: 500, time: '30分鐘', desc: '修型+甘皮處理+指緣油' },
+                    { id: 'c3', name: '卸甲續做(本店)', price: 150, time: '30分鐘', desc: '卸除舊凝膠+新款施作' },
+                    { id: 'c4', name: '卸甲續做(他店)', price: 300, time: '40分鐘', desc: '卸除舊凝膠+新款施作' },
+                    { id: 'c5', name: '純卸甲(本店)', price: 400, time: '60分鐘', desc: '卸除+修甲' },
+                    { id: 'c6', name: '純卸甲(他店)', price: 600, time: '60分鐘', desc: '卸除+修甲' },
+                ]
+            }
+        ];
+
+        const TIME_SLOTS = ["09:00", "13:00", "16:00", "19:00"];
+
+        const formatLocal = (date) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        const getCalendarData = () => {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const endDate = new Date(today);
+            endDate.setDate(today.getDate() + 60);
+
+            let currentIterDate = new Date(today.getFullYear(), today.getMonth(), 1);
+            const months = [];
+
+            while (currentIterDate <= endDate || (currentIterDate.getMonth() === endDate.getMonth() && currentIterDate.getFullYear() === endDate.getFullYear())) {
+                const year = currentIterDate.getFullYear();
+                const month = currentIterDate.getMonth();
+                const daysInMonth = new Date(year, month + 1, 0).getDate();
+                const firstDayOfWeek = new Date(year, month, 1).getDay();
+
+                const days = [];
+                for (let i = 0; i < firstDayOfWeek; i++) days.push(null);
+                for (let d = 1; d <= daysInMonth; d++) {
+                    const dateObj = new Date(year, month, d);
+                    const isSelectable = dateObj >= today && dateObj <= endDate;
+                    days.push({
+                        dateObj: dateObj,
+                        day: d,
+                        selectable: isSelectable,
+                        formatted: formatLocal(dateObj),
+                        weekday: dateObj.toLocaleDateString('zh-TW', { weekday: 'short' }),
+                        month: month + 1
+                    });
+                }
+                months.push({ year, month: month + 1, days });
+                currentIterDate.setMonth(currentIterDate.getMonth() + 1);
+            }
+            return months;
+        };
+
+        const ServiceStep = ({ booking, updateBooking, nextStep, prevStep }) => {
+            const [activeCategoryIdx, setActiveCategoryIdx] = useState(0);
+            const handleCardClick = (item) => {
+                const existingItem = booking.services.find(s => s.id === item.id);
+                if (item.allowQuantity) {
+                    if (!existingItem) updateBooking('services', [...booking.services, { ...item, quantity: 1 }]);
+                    return;
+                }
+                if (existingItem) updateBooking('services', booking.services.filter(s => s.id !== item.id));
+                else updateBooking('services', [...booking.services, { ...item, quantity: 1 }]);
+            };
+            const updateQuantity = (e, item, delta) => {
+                e.stopPropagation();
+                const existingItem = booking.services.find(s => s.id === item.id);
+                if (!existingItem && delta > 0) { updateBooking('services', [...booking.services, { ...item, quantity: delta }]); return; }
+                if (existingItem) {
+                    const newQuantity = (existingItem.quantity || 1) + delta;
+                    if (newQuantity <= 0) updateBooking('services', booking.services.filter(s => s.id !== item.id));
+                    else updateBooking('services', booking.services.map(s => s.id === item.id ? { ...s, quantity: newQuantity } : s));
+                }
+            };
+            const totalSelected = booking.services.length;
+            const totalPrice = booking.services.reduce((sum, item) => sum + (item.price * (item.quantity || 1)), 0);
+            const activeCategory = SERVICES_DATA[activeCategoryIdx];
+            return (
+                <div className="animate-slideUp pb-24">
+                    <h3 className="text-xl font-bold mb-4 text-center" style={{ color: COLORS.text }}>選擇服務項目</h3>
+                    <div className="mb-6 relative">
+                        <label className="block text-xs font-bold text-[#D48594] mb-2 pl-1">服務類別</label>
+                        <select value={activeCategoryIdx} onChange={(e) => setActiveCategoryIdx(Number(e.target.value))} className="w-full p-4 pr-10 rounded-xl appearance-none bg-white border border-[#EBB3BE] text-[#63464D] font-bold focus:outline-none focus:ring-2 focus:ring-[#D48594] shadow-sm cursor-pointer">
+                            {SERVICES_DATA.map((cat, idx) => (<option key={idx} value={idx}>{cat.category}</option>))}
+                        </select>
+                        <div className="absolute top-[38px] right-4 flex items-center pointer-events-none text-[#D48594]"><ChevronDown className="w-6 h-6" /></div>
+                    </div>
+                    <p className="text-center text-sm mb-4 opacity-70" style={{ color: COLORS.text }}>可多選需要的服務</p>
+                    <div className="space-y-6">
+                        <div className="rounded-xl p-4 border shadow-sm" style={{ backgroundColor: COLORS.card_bg, borderColor: COLORS.accent }}>
+                            <h4 className="font-bold text-lg mb-3 flex items-center gap-2 border-b pb-2" style={{ color: COLORS.primary, borderColor: COLORS.accent }}><activeCategory.icon className="w-5 h-5"/> {activeCategory.category}</h4>
+                            <div className="space-y-3">
+                                {activeCategory.items.map((item) => {
+                                    const selectedItem = booking.services.find(s => s.id === item.id);
+                                    const isSelected = !!selectedItem;
+                                    const quantity = selectedItem ? (selectedItem.quantity || 1) : 0;
+                                    return (
+                                        <div key={item.id} onClick={() => handleCardClick(item)} className={`p-3 rounded-lg border cursor-pointer transition-all flex justify-between items-center shadow-sm relative overflow-hidden ${isSelected ? 'transform scale-[1.02]' : 'hover:opacity-90'}`} style={{ backgroundColor: isSelected ? '#FFF0F5' : COLORS.white, borderColor: isSelected ? COLORS.primary : 'transparent' }}>
+                                            <div className="flex-1"><span className="font-bold block" style={{ color: COLORS.text }}>{item.name}</span><span className="text-xs block mt-1 opacity-70" style={{ color: COLORS.text }}>{item.desc ? item.desc : ''} {item.time ? `| ${item.time}` : ''}</span></div>
+                                            <div className="text-right ml-4 flex items-center gap-3">
+                                                {item.allowQuantity && isSelected ? (<div className="flex items-center rounded-full p-1 bg-white" style={{ border: `1px solid ${COLORS.accent}` }}><button onClick={(e) => updateQuantity(e, item, -1)} className="w-7 h-7 flex items-center justify-center rounded-full bg-white shadow-sm hover:bg-gray-100 text-sm font-bold" style={{ color: COLORS.primary }}><Minus className="w-4 h-4" /></button><span className="w-8 text-center font-bold text-sm" style={{ color: COLORS.text }}>{quantity}</span><button onClick={(e) => updateQuantity(e, item, 1)} className="w-7 h-7 flex items-center justify-center rounded-full shadow-sm hover:opacity-90 text-white text-sm font-bold" style={{ backgroundColor: COLORS.primary }}><Plus className="w-4 h-4" /></button></div>) : (<><span className="block font-bold" style={{ color: COLORS.primary }}>${item.price}</span>{isSelected && <Check className="w-4 h-4" style={{ color: COLORS.primary }} />}</>)}
+                                                {item.allowQuantity && !isSelected && <span className="block font-bold" style={{ color: COLORS.primary }}>${item.price}</span>}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="fixed bottom-0 left-0 w-full p-4 border-t z-50 flex items-center justify-between shadow-[0_-4px_10px_rgba(0,0,0,0.05)] md:absolute md:rounded-b-[40px]" style={{ backgroundColor: COLORS.white, borderColor: COLORS.accent }}>
+                        <div className="flex flex-col"><span className="text-xs text-[#8D6E63]">已選 {totalSelected} 種服務</span><span className="text-xl font-bold" style={{ color: COLORS.primary }}>${totalPrice}</span></div>
+                        <div className="flex gap-2">
+                            <button onClick={prevStep} className="px-4 py-2 rounded-full border bg-white font-bold text-sm" style={{ borderColor: COLORS.accent, color: COLORS.text }}>上一步</button>
+                            <button disabled={totalSelected === 0} onClick={nextStep} className="px-6 py-2 rounded-full text-white font-bold shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 text-sm" style={{ backgroundColor: COLORS.primary }}>下一步</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const DateStep = ({ booking, updateBooking, nextStep, blockedDates, blockedTimes }) => {
+            const calendarData = useMemo(() => getCalendarData(), []);
+            const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+            const [viewMonthIndex, setViewMonthIndex] = useState(0);
+            const monthData = calendarData[viewMonthIndex];
+            return (
+                <div className="animate-slideUp pb-16">
+                    <div className="mb-6 text-center"><h3 className="text-xl font-bold" style={{ color: COLORS.text }}>預約時間</h3><p className="text-xs mt-1 opacity-70" style={{ color: COLORS.text }}>【時段可微調，預約完成請回line告知】</p></div>
+                    <div className="mb-6 space-y-6">
+                        <div className="bg-white rounded-xl shadow-sm border p-4 transition-all" style={{ borderColor: COLORS.accent }}>
+                            <div className="flex justify-between items-center mb-4 px-2">
+                                <button onClick={() => setViewMonthIndex(Math.max(0, viewMonthIndex - 1))} disabled={viewMonthIndex === 0} className={`p-1 rounded-full transition-colors ${viewMonthIndex === 0 ? 'opacity-30 cursor-not-allowed' : 'hover:bg-gray-100 text-gray-600'}`}><ChevronLeft className="w-6 h-6" /></button>
+                                <h4 className="text-center font-bold text-lg" style={{ color: COLORS.primary }}>{monthData.year}年 {monthData.month}月</h4>
+                                <button onClick={() => setViewMonthIndex(Math.min(calendarData.length - 1, viewMonthIndex + 1))} disabled={viewMonthIndex === calendarData.length - 1} className={`p-1 rounded-full transition-colors ${viewMonthIndex === calendarData.length - 1 ? 'opacity-30 cursor-not-allowed' : 'hover:bg-gray-100 text-gray-600'}`}><ChevronRight className="w-6 h-6" /></button>
+                            </div>
+                            <div className="grid grid-cols-7 mb-2 text-center">{WEEKDAYS.map(w => <div key={w} className="text-xs font-medium opacity-60" style={{ color: COLORS.text }}>{w}</div>)}</div>
+                            <div className="grid grid-cols-7 gap-1 md:gap-2 text-center min-h-[280px] content-start">
+                                {monthData.days.map((d, dIdx) => {
+                                    if (!d) return <div key={`empty-${dIdx}`} className="aspect-square"></div>;
+                                    const isBlockedDay = blockedDates.includes(d.formatted);
+                                    const isSelected = booking.date?.formatted === d.formatted;
+                                    const isSelectable = d.selectable && !isBlockedDay;
+                                    return (
+                                        <button key={dIdx} disabled={!isSelectable} onClick={() => updateBooking('date', { formatted: d.formatted, day: d.day, weekday: d.weekday })} className={`aspect-square rounded-full flex flex-col items-center justify-center text-sm font-bold transition-all relative ${!isSelectable ? 'opacity-30 cursor-not-allowed text-gray-300' : 'hover:bg-[#FCECF0]'} ${isSelected ? 'shadow-md scale-110' : ''}`} style={{ backgroundColor: isSelected ? COLORS.primary : 'transparent', color: isSelected ? 'white' : (isSelectable ? COLORS.text : '#AAA') }}>
+                                            <span>{d.day}</span>{isBlockedDay && <span className="text-[10px] absolute -bottom-1 text-red-400">滿</span>}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="mb-8"><p className="font-medium mb-3 pl-1" style={{ color: COLORS.text }}>選擇時段</p><div className="grid grid-cols-2 gap-3">{TIME_SLOTS.map((time) => { const isBlockedTime = booking.date && blockedTimes[booking.date.formatted]?.includes(time); return (<button key={time} disabled={isBlockedTime} onClick={() => updateBooking('time', time)} className={`py-3 rounded-xl text-sm font-medium border-2 transition-all shadow-sm flex justify-between px-4 items-center ${booking.time === time ? 'text-white shadow-inner' : ''} ${isBlockedTime ? 'opacity-40 cursor-not-allowed bg-gray-100 border-transparent' : ''}`} style={{ backgroundColor: booking.time === time ? COLORS.primary : (isBlockedTime ? '#F5F5F5' : COLORS.card_bg), borderColor: booking.time === time ? COLORS.primary : 'transparent', color: booking.time === time ? COLORS.white : (isBlockedTime ? '#AAA' : COLORS.text) }}><span>{time}</span>{isBlockedTime && <span className="text-xs">已額滿</span>}</button>); })}</div></div>
+                    <div className="flex mt-8"><button disabled={!booking.date || !booking.time} onClick={nextStep} className="w-full py-3 rounded-full text-white font-bold shadow-md disabled:opacity-50 hover:opacity-90" style={{ backgroundColor: COLORS.primary }}>下一步</button></div>
+                </div>
+            );
+        };
+
+        const InfoStep = ({ booking, updateBooking, nextStep, prevStep }) => {
+            const isFormValid = booking.name && booking.phone;
+            const totalPrice = booking.services.reduce((sum, item) => sum + (item.price * (item.quantity || 1)), 0);
+            return (
+                <div className="animate-slideUp pb-16">
+                    <h3 className="text-xl font-bold mb-6 text-center" style={{ color: COLORS.text }}>聯絡資料</h3>
+                    <div className="p-6 rounded-2xl shadow-sm border space-y-4" style={{ backgroundColor: COLORS.card_bg, borderColor: COLORS.accent }}>
+                        <div><label className="block font-medium mb-2 pl-1" style={{ color: COLORS.text }}>姓名</label><input type="text" value={booking.name} onChange={(e) => updateBooking('name', e.target.value)} className="w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-[#EBB3BE]" style={{ backgroundColor: COLORS.white, borderColor: COLORS.accent }} placeholder="請輸入姓名" /></div>
+                        <div><label className="block font-medium mb-2 pl-1" style={{ color: COLORS.text }}>電話</label><input type="tel" value={booking.phone} onChange={(e) => updateBooking('phone', e.target.value)} className="w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-[#EBB3BE]" style={{ backgroundColor: COLORS.white, borderColor: COLORS.accent }} placeholder="09xx-xxx-xxx" /></div>
+                        <div><label className="block font-medium mb-2 pl-1" style={{ color: COLORS.text }}>備註</label><textarea value={booking.note} onChange={(e) => updateBooking('note', e.target.value)} className="w-full px-4 py-3 rounded-xl border focus:outline-none resize-none focus:ring-2 focus:ring-[#EBB3BE]" style={{ backgroundColor: COLORS.white, borderColor: COLORS.accent }} placeholder="需要卸甲/延甲..." rows="2" /></div>
+                    </div>
+                    <div className="mt-6 p-4 rounded-xl text-sm border border-dashed" style={{ backgroundColor: 'rgba(255,255,255,0.6)', borderColor: COLORS.primary }}>
+                        <h4 className="font-bold mb-2" style={{ color: COLORS.text }}>預約確認：</h4><ul className="space-y-1 mb-2 opacity-80" style={{ color: COLORS.text }}>{booking.services.map((s, i) => (<li key={i} className="flex justify-between"><span>{s.name} {s.quantity > 1 && <span className="text-xs ml-1 font-bold bg-[#EBB3BE] text-white px-1.5 py-0.5 rounded-full">x{s.quantity}</span>}</span><span>${s.price * (s.quantity || 1)}</span></li>))}</ul>
+                        <div className="flex justify-between font-bold border-t pt-2" style={{ borderColor: COLORS.accent, color: COLORS.primary }}><span>總計</span><span>${totalPrice}</span></div><p className="mt-2 text-xs opacity-70" style={{ color: COLORS.text }}>{booking.date?.formatted} {booking.time}</p>
+                    </div>
+                    <div className="flex justify-between gap-4 mt-6"><button onClick={prevStep} className="px-6 py-3 rounded-full border bg-white font-bold" style={{ borderColor: COLORS.accent, color: COLORS.text }}>上一步</button><button disabled={!isFormValid} onClick={nextStep} className="flex-1 py-3 rounded-full text-white font-bold shadow-md disabled:opacity-50 hover:opacity-90" style={{ backgroundColor: COLORS.primary }}>確認預約</button></div>
+                </div>
+            );
+        };
+
+        const SuccessStep = ({ booking, setBooking, setStep }) => {
+            const totalPrice = booking.services.reduce((sum, item) => sum + (item.price * (item.quantity || 1)), 0);
+            const bookingCode = `#MT${Math.floor(Math.random() * 10000)}`;
+            const handleLineShare = () => {
+                const message = `【nainai nail 預約單】\n--------------------\n預約代號：${bookingCode}\n姓名：${booking.name}\n電話：${booking.phone}\n日期：${booking.date?.formatted} (${booking.date?.weekday})\n時間：${booking.time}\n服務項目：\n${booking.services.map(s => `- ${s.name}${s.quantity > 1 ? ' x'+s.quantity : ''} ($${s.price * (s.quantity || 1)})`).join('\n')}\n預估金額：$${totalPrice}\n備註事項：${booking.note || '無'}\n--------------------\n(此訊息由預約系統自動產生)`;
+                
+                window.fallbackCopyTextToClipboard(message);
+                window.alert("✅ 預約資訊已複製！\n\n即將為您開啟 LINE，請在對話框中「貼上」並傳送訊息給我們確認喔！"); 
+                
+                setTimeout(() => {
+                    window.open('https://lin.ee/VUrTCMY', '_blank');
+                }, 2000);
+            };
+            return (
+                <div className="flex flex-col items-center justify-center text-center animate-fadeIn py-10">
+                    <div className="w-20 h-20 rounded-full flex items-center justify-center mb-6 shadow-lg" style={{ backgroundColor: COLORS.primary }}><Check className="w-10 h-10 text-white" /></div>
+                    <h2 className="text-2xl font-bold mb-2" style={{ color: COLORS.text }}>預約完成！</h2><p className="mb-6 opacity-70" style={{ color: COLORS.text }}>請點擊下方按鈕通知我們</p>
+                    <div className="w-full p-6 rounded-2xl shadow-md border text-left space-y-3 relative overflow-hidden mb-6" style={{ backgroundColor: COLORS.card_bg, borderColor: COLORS.accent }}><div className="absolute top-0 right-0 w-16 h-16 rounded-bl-full opacity-20" style={{ backgroundColor: COLORS.primary }}></div><p className="text-xs opacity-50" style={{ color: COLORS.text }}>預約代號 {bookingCode}</p><div><p className="text-xs opacity-50" style={{ color: COLORS.text }}>姓名</p><p className="font-medium" style={{ color: COLORS.text }}>{booking.name}</p></div><div><p className="text-xs opacity-50" style={{ color: COLORS.text }}>時間</p><p className="font-medium" style={{ color: COLORS.text }}>{booking.date?.formatted} {booking.time}</p></div><div className="pt-2 mt-2 border-t border-dashed" style={{ borderColor: COLORS.accent }}><p className="text-xs opacity-50 mb-1" style={{ color: COLORS.text }}>服務項目</p><ul className="text-sm space-y-1" style={{ color: COLORS.text }}>{booking.services.map((s, i) => <li key={i} className="flex justify-between"><span>{s.name} {s.quantity > 1 && `x${s.quantity}`}</span></li>)}</ul><p className="text-right font-bold mt-2" style={{ color: COLORS.primary }}>總金額 ${totalPrice}</p></div></div>
+                    <button onClick={handleLineShare} className="w-full py-4 rounded-xl text-white font-bold shadow-md transform active:scale-95 transition-all hover:opacity-90 flex items-center justify-center gap-2" style={{ backgroundColor: '#06C755' }}><span className="bg-white/20 p-1 rounded-full"><Plus className="w-4 h-4 text-white" /></span>複製內容並前往 LINE 確認</button>
+                    <button onClick={() => { setBooking({ services: [], date: null, time: null, name: '', phone: '', note: '' }); setStep(0); }} className="mt-8 font-bold border-b-2 pb-1 transition-colors hover:opacity-70 inline-block text-sm" style={{ color: COLORS.text, borderColor: COLORS.primary }}>再預約一筆</button>
+                </div>
+            );
+        };
+
+        const BookingSystem = ({ blockedDates, blockedTimes }) => {
+            const [step, setStep] = useState(0);
+            const [booking, setBooking] = useState({ services: [], date: null, time: null, name: '', phone: '', note: '' });
+            const nextStep = () => { setStep((p) => p + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+            const prevStep = () => setStep((p) => p - 1);
+            const updateBooking = (field, value) => {
+                if (field === 'services') setBooking(prev => ({ ...prev, services: value }));
+                else setBooking(prev => ({ ...prev, [field]: value }));
+            };
+            return (
+                <div className="pt-2">
+                    {step === 0 && <DateStep booking={booking} updateBooking={updateBooking} nextStep={nextStep} blockedDates={blockedDates} blockedTimes={blockedTimes} />}
+                    {step === 1 && <ServiceStep booking={booking} updateBooking={updateBooking} nextStep={nextStep} prevStep={prevStep} />}
+                    {step === 2 && <InfoStep booking={booking} updateBooking={updateBooking} nextStep={nextStep} prevStep={prevStep} />}
+                    {step === 3 && <SuccessStep booking={booking} setBooking={setBooking} setStep={setStep} />}
+                </div>
+            );
+        };
+
+        const AdminPanel = ({ blockedDates, setBlockedDates, blockedTimes, setBlockedTimes, onLogout, saveSettings }) => {
+            const calendarData = useMemo(() => getCalendarData(), []);
+            const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+            const [selectedDate, setSelectedDate] = useState(null);
+            const [viewMonthIndex, setViewMonthIndex] = useState(0);
+            const monthData = calendarData[viewMonthIndex];
+
+            const toggleDateBlock = async (dateStr) => {
+                let newDates;
+                if (blockedDates.includes(dateStr)) newDates = blockedDates.filter(d => d !== dateStr);
+                else newDates = [...blockedDates, dateStr];
+                setBlockedDates(newDates);
+                await saveSettings(newDates, blockedTimes);
+            };
+
+            const toggleTimeBlock = async (time) => {
+                if (!selectedDate) return;
+                const dateStr = selectedDate.formatted;
+                const currentBlockedTimes = blockedTimes[dateStr] || [];
+                let newBlockedTimes;
+                if (currentBlockedTimes.includes(time)) newBlockedTimes = currentBlockedTimes.filter(t => t !== time);
+                else newBlockedTimes = [...currentBlockedTimes, time];
+                const updatedTimes = { ...blockedTimes, [dateStr]: newBlockedTimes };
+                setBlockedTimes(updatedTimes);
+                await saveSettings(blockedDates, updatedTimes);
+            };
+
+            return (
+                <div className="p-4 min-h-[600px] bg-slate-50">
+                    <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold text-slate-700">商家管理後台</h2><button onClick={onLogout} className="px-4 py-2 bg-slate-200 rounded-lg text-sm text-slate-600 font-bold">登出</button></div>
+                    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-6">
+                        <p className="text-sm text-slate-500 mb-2">點擊日期可切換 <span className="text-red-500 font-bold">整日公休</span>，或點選下方編輯時段。</p>
+                        <div className="flex justify-between items-center mb-4 px-2">
+                            <button onClick={() => setViewMonthIndex(Math.max(0, viewMonthIndex - 1))} disabled={viewMonthIndex === 0} className={`p-1 rounded-full ${viewMonthIndex === 0 ? 'opacity-30' : 'hover:bg-slate-100'}`}><ChevronLeft className="w-6 h-6" /></button>
+                            <h4 className="text-center font-bold text-lg text-slate-700">{monthData.year}年 {monthData.month}月</h4>
+                            <button onClick={() => setViewMonthIndex(Math.min(calendarData.length - 1, viewMonthIndex + 1))} disabled={viewMonthIndex === calendarData.length - 1} className={`p-1 rounded-full ${viewMonthIndex === calendarData.length - 1 ? 'opacity-30' : 'hover:bg-slate-100'}`}><ChevronRight className="w-6 h-6" /></button>
+                        </div>
+                        <div className="grid grid-cols-7 mb-1 text-center">{WEEKDAYS.map(w => <div key={w} className="text-xs text-slate-400">{w}</div>)}</div>
+                        <div className="grid grid-cols-7 gap-1 text-center min-h-[280px] content-start">
+                            {monthData.days.map((d, dIdx) => {
+                                if (!d) return <div key={`empty-${dIdx}`} className="aspect-square"></div>;
+                                const isBlocked = blockedDates.includes(d.formatted);
+                                const isSelected = selectedDate?.formatted === d.formatted;
+                                const hasPartialBlock = blockedTimes[d.formatted]?.length > 0;
+                                return (
+                                    <button key={dIdx} onClick={() => setSelectedDate(d)} onDoubleClick={() => toggleDateBlock(d.formatted)} className={`aspect-square rounded-lg flex flex-col items-center justify-center text-sm font-bold relative border-2 ${isSelected ? 'border-slate-800' : 'border-transparent'} ${isBlocked ? 'bg-red-100 text-red-400' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                                        {d.day}{hasPartialBlock && !isBlocked && <div className="w-1.5 h-1.5 rounded-full bg-orange-400 absolute bottom-1"></div>}{isBlocked && <XCircle className="w-4 h-4 absolute opacity-20" />}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    {selectedDate && (
+                        <div className="bg-white p-4 rounded-xl shadow-lg border-2 border-slate-200 animate-slideUp">
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="font-bold text-lg text-slate-700">{selectedDate.month}月{selectedDate.day}日 ({selectedDate.weekday})</h3>
+                                <button onClick={() => toggleDateBlock(selectedDate.formatted)} className={`px-3 py-1 rounded text-sm font-bold transition-colors ${blockedDates.includes(selectedDate.formatted) ? 'bg-red-500 text-white' : 'bg-slate-200 text-slate-600'}`}>{blockedDates.includes(selectedDate.formatted) ? '已設為公休' : '設為整日公休'}</button>
+                            </div>
+                            {!blockedDates.includes(selectedDate.formatted) && (
+                                <div>
+                                    <p className="text-sm text-slate-500 mb-3">點擊時段以關閉/開啟預約：</p>
+                                    <div className="grid grid-cols-4 gap-3">
+                                        {TIME_SLOTS.map(time => {
+                                            const isBlocked = blockedTimes[selectedDate.formatted]?.includes(time);
+                                            return (<button key={time} onClick={() => toggleTimeBlock(time)} className={`py-2 rounded-lg font-bold text-sm transition-all ${isBlocked ? 'bg-gray-200 text-gray-400 decoration-slice line-through' : 'bg-green-100 text-green-700 hover:bg-green-200'}`}>{time}</button>);
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('price');
+            const [isAdminMode, setIsAdminMode] = useState(false);
+            const [showLoginModal, setShowLoginModal] = useState(false);
+            const [passwordInput, setPasswordInput] = useState('');
+            const [user, setUser] = useState(null);
+            
+            // 狀態變數
+            const [blockedDates, setBlockedDates] = useState([]);
+            const [blockedTimes, setBlockedTimes] = useState({});
+            
+            // 雲端模式狀態與 Firebase 解構 (已修復)
+            const isCloud = window.isCloudEnabled || false;
+            const firebaseTools = window.firebaseFunctions || {};
+            const { signInAnonymously, onAuthStateChanged, doc, setDoc, onSnapshot } = firebaseTools;
+            const db = window.db || null;
+            const auth = window.auth || null;
+
+            // 初始化
+            useEffect(() => {
+                if (isCloud && auth) {
+                    if(signInAnonymously) signInAnonymously(auth).catch(console.error);
+                    if(onAuthStateChanged) {
+                        const unsubscribe = onAuthStateChanged(auth, setUser);
+                        return () => unsubscribe();
+                    }
+                } else {
+                    try {
+                        const savedDates = JSON.parse(localStorage.getItem('nainai_blockedDates') || '[]');
+                        const savedTimes = JSON.parse(localStorage.getItem('nainai_blockedTimes') || '{}');
+                        setBlockedDates(savedDates);
+                        setBlockedTimes(savedTimes);
+                    } catch(e) { console.error(e); }
+                    
+                    const handleStorageChange = () => {
+                        try {
+                            const newDates = JSON.parse(localStorage.getItem('nainai_blockedDates') || '[]');
+                            const newTimes = JSON.parse(localStorage.getItem('nainai_blockedTimes') || '{}');
+                            setBlockedDates(newDates);
+                            setBlockedTimes(newTimes);
+                        } catch (e) {}
+                    };
+                    window.addEventListener('storage', handleStorageChange);
+                    return () => window.removeEventListener('storage', handleStorageChange);
+                }
+            }, [isCloud, auth, signInAnonymously, onAuthStateChanged]);
+
+            // 雲端資料同步監聽
+            useEffect(() => {
+                if (!isCloud || !user || !db || !onSnapshot || !doc) return;
+                const settingsRef = doc(db, 'nainai_settings', 'blocked_data');
+                const unsubscribe = onSnapshot(settingsRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        setBlockedDates(data.blockedDates || []);
+                        setBlockedTimes(data.blockedTimes || {});
+                    }
+                });
+                return () => unsubscribe();
+            }, [isCloud, user, db, onSnapshot, doc]);
+
+            const saveSettings = async (newDates, newTimes) => {
+                if (isCloud && db && setDoc && doc) {
+                    if (!user) return;
+                    const settingsRef = doc(db, 'nainai_settings', 'blocked_data');
+                    try {
+                        await setDoc(settingsRef, { blockedDates: newDates, blockedTimes: newTimes }, { merge: true });
+                        window.alert("儲存成功！");
+                    } catch (error) { window.alert("儲存失敗，請檢查網路狀態"); }
+                } else {
+                    localStorage.setItem('nainai_blockedDates', JSON.stringify(newDates));
+                    localStorage.setItem('nainai_blockedTimes', JSON.stringify(newTimes));
+                    window.dispatchEvent(new Event('storage'));
+                    window.alert("儲存成功 (本機端)！");
+                }
+            };
+
+            const handleLogin = () => {
+                if (passwordInput === '1138') {
+                    setIsAdminMode(true);
+                    setShowLoginModal(false);
+                    setPasswordInput('');
+                } else {
+                    window.alert('密碼錯誤！');
+                }
+            };
+
+            if (isAdminMode) {
+                return <AdminPanel blockedDates={blockedDates} setBlockedDates={setBlockedDates} blockedTimes={blockedTimes} setBlockedTimes={setBlockedTimes} onLogout={() => setIsAdminMode(false)} saveSettings={saveSettings} />;
+            }
+
+            return (
+                <div className="min-h-screen w-full flex items-center justify-center font-sans p-0 md:p-4 bg-[#F8DEE5]">
+                    <div className="absolute inset-0 z-0 pointer-events-none" style={{ backgroundColor: '#F8DEE5', backgroundImage: `radial-gradient(${COLORS.accent}60 3px, transparent 3px)`, backgroundSize: '24px 24px', backgroundPosition: '0 0, 12px 12px' }}></div>
+                    <div className="w-full md:max-w-lg h-screen md:h-[800px] rounded-none md:rounded-[40px] shadow-2xl relative z-10 overflow-hidden border-0 md:border-8 border-white flex flex-col" style={{ backgroundColor: COLORS.background }}>
+                        <div className="text-center py-6 text-white rounded-b-3xl shadow-md z-20 flex-shrink-0 relative" style={{ backgroundColor: COLORS.primary }}>
+                            <h1 className="text-2xl font-bold tracking-widest">nainai nail</h1>
+                            <p className="text-sm opacity-90 mt-1">您的專屬美甲服務資訊</p>
+                            <div className="absolute top-4 right-4" title={isCloud ? "雲端同步中" : "僅本機儲存"}>
+                                {isCloud ? <Cloud className="w-5 h-5 text-green-200" /> : <CloudOff className="w-5 h-5 text-red-200" />}
+                            </div>
+                        </div>
+
+                        <div className="flex sticky top-0 z-30 shadow-sm border-b" style={{ backgroundColor: COLORS.background, borderColor: COLORS.accent }}>
+                            {[{ id: 'price', label: '價目表' }, { id: 'notice', label: '預約須知' }, { id: 'scheme', label: '快速預約' }, { id: 'contact', label: '聯繫我們' }].map((tab) => (
+                                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex-1 py-4 text-sm font-bold transition-all relative outline-none ${activeTab === tab.id ? 'opacity-100' : 'opacity-60 hover:opacity-80'}`} style={{ color: COLORS.text, backgroundColor: activeTab === tab.id ? 'rgba(255,255,255,0.3)' : 'transparent' }}>
+                                    {tab.label}
+                                    {activeTab === tab.id && <div className="absolute bottom-0 left-0 w-full h-1" style={{ backgroundColor: COLORS.primary }}></div>}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-5 scroll-smooth hide-scrollbar">
+                            {activeTab === 'price' && (
+                                <div className="animate-fadeIn space-y-4 pb-10">
+                                    <div className="rounded-xl p-5 shadow-sm border bg-white" style={{ borderColor: COLORS.accent }}>
+                                        <h3 className="font-bold border-b-2 border-dashed pb-2 mb-3" style={{ color: COLORS.primary }}>💅 基礎美甲服務</h3>
+                                        <ul className="text-sm space-y-2 pl-2" style={{ color: COLORS.text }}>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>單色凝膠：900 元</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>貓眼凝膠：1100 元</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>漸層/法式/鏡面凝膠：1200 元</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>跳一色凝膠：50 元</li>
+                                        </ul>
+                                    </div>
+                                    <div className="rounded-xl p-5 shadow-sm border bg-white" style={{ borderColor: COLORS.accent }}>
+                                        <h3 className="font-bold border-b-2 border-dashed pb-2 mb-3" style={{ color: COLORS.primary }}>✨ 造型設計</h3>
+                                        <ul className="text-sm space-y-2 pl-2" style={{ color: COLORS.text }}>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>造型款 A (簡約)：1200 元起</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>造型款 B (華麗)：1700 元起</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>客製造型(傳圖報價)：1200 元起</li>
+                                        </ul>
+                                    </div>
+                                    <div className="rounded-xl p-5 shadow-sm border bg-white" style={{ borderColor: COLORS.accent }}>
+                                        <h3 className="font-bold border-b-2 border-dashed pb-2 mb-3" style={{ color: COLORS.primary }}>💅 其他設計</h3>
+                                        <ul className="text-sm space-y-2 pl-2" style={{ color: COLORS.text }}>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>造型設計：每指 100 ~ 250 元起</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>立體翻模：每個 250 元起</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>手繪：每指 50 ~ 250 元起</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>貼紙/飾品：每個 10 元起</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>延甲服務：每指 100 元</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>補甲服務：每指 100 元</li>
+                                        </ul>
+                                    </div>
+                                    <div className="rounded-xl p-5 shadow-sm border bg-white" style={{ borderColor: COLORS.accent }}>
+                                        <h3 className="font-bold border-b-2 border-dashed pb-2 mb-3" style={{ color: COLORS.primary }}>💅 保養與卸甲服務</h3>
+                                        <ul className="text-sm space-y-2 pl-2" style={{ color: COLORS.text }}>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>基礎保養(手部/足部)：300/500 元</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>卸甲加購基礎保養：150 元</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>卸甲續做/不續做(本店)：150/400 元</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>卸甲續做/不續做(他店)：300/600 元</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'notice' && (
+                                <div className="animate-fadeIn space-y-4 pb-10">
+                                    <div className="rounded-xl p-5 shadow-sm border bg-white" style={{ borderColor: COLORS.accent }}>
+                                        <h3 className="font-bold border-b-2 border-dashed pb-2 mb-3" style={{ color: COLORS.primary }}>📋 預約注意事項</h3>
+                                        <ul className="text-sm space-y-3 pl-2 leading-relaxed" style={{ color: COLORS.text }}>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>請提前三天預約，以便安排您的時段。</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>預約後若需更改或取消，請於 24 小時前告知。</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>不接受當天臨時取消，下次再約需預付訂金。</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>遲到超過 15 分鐘，視同取消預約。</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>請勿攜伴。</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>尊重原創，作品皆無法100%複製，完美主義者請勿預約。</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>私宅工作室，有貓貓店長[阿寶]出沒 🐱。</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>施作前兩週請避免修剪指甲。</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>僅提供現金、轉帳方式交易。</li>
+                                        </ul>
+                                    </div>
+                                    <div className="rounded-xl p-5 shadow-sm border bg-white" style={{ borderColor: COLORS.accent }}>
+                                        <h3 className="font-bold border-b-2 border-dashed pb-2 mb-3" style={{ color: COLORS.primary }}>💬 客服與詢問</h3>
+                                        <ul className="text-sm space-y-2 pl-2" style={{ color: COLORS.text }}>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>對於款式或價格有疑問，歡迎私訊詢問。</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>現場服務以當次預約項目為主，臨時加項需視情況安排。</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>手、足均不接病甲。</li>
+                                            <li className="border-l-4 pl-2" style={{ borderColor: COLORS.accent }}>製甲過程約2~4小時，請女孩們保留充裕的時間，提升成品的細緻度，故不接急單。</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'scheme' && (
+                                <BookingSystem blockedDates={blockedDates} blockedTimes={blockedTimes} />
+                            )}
+
+                            {activeTab === 'contact' && (
+                                <div className="animate-fadeIn space-y-4 pt-4">
+                                    <div className="rounded-xl p-5 shadow-sm text-center border bg-white" style={{ borderColor: COLORS.accent }}>
+                                        <h3 className="text-lg font-bold mb-6" style={{ color: COLORS.text }}>聯繫方式</h3>
+                                        <a href="https://lin.ee/G6368sk" target="_blank" rel="noreferrer" className="block w-full py-4 mb-4 rounded-xl text-white font-bold shadow-md bg-[#D48594]">
+                                            <div className="flex items-center justify-center gap-2"><Phone className="w-5 h-5" /> Line 官方帳號</div>
+                                        </a>
+                                        <a href="https://www.instagram.com/_nainai_nails_" target="_blank" rel="noreferrer" className="block w-full py-4 mb-4 rounded-xl text-white font-bold shadow-md bg-[#D48594]">
+                                            <div className="flex items-center justify-center gap-2"><Heart className="w-5 h-5" /> Instagram</div>
+                                            <span className="text-xs font-normal opacity-90 block mt-1">追蹤最新款式與活動！</span>
+                                        </a>
+                                        <a href="https://maps.app.goo.gl/gjaz6m9bfyA9Egdq7" target="_blank" rel="noreferrer" className="block w-full py-4 mb-4 rounded-xl text-white font-bold shadow-md bg-[#D48594]"><div className="flex items-center justify-center gap-2"><MapPin className="w-5 h-5" /> Google 地圖</div></a>
+                                    </div>
+                                    <div className="text-center mt-10">
+                                        <button onClick={() => setShowLoginModal(true)} className="p-2 text-gray-300 hover:text-gray-400 transition-colors"><Lock className="w-4 h-4" /></button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="h-4 w-full absolute bottom-0 opacity-50 z-20 pointer-events-none" style={{ backgroundColor: COLORS.primary }}></div>
+
+                        {showLoginModal && (
+                            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fadeIn">
+                                <div className="bg-white p-6 rounded-2xl shadow-xl w-64 text-center">
+                                    <h3 className="font-bold text-gray-700 mb-4">商家後台登入</h3>
+                                    <input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} placeholder="請輸入密碼" className="w-full px-4 py-2 border rounded-lg mb-4 text-center focus:outline-none focus:ring-2 focus:ring-pink-300" />
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setShowLoginModal(false)} className="flex-1 py-2 bg-gray-100 rounded-lg text-sm font-bold text-gray-500">取消</button>
+                                        <button onClick={handleLogin} className="flex-1 py-2 bg-[#D48594] rounded-lg text-sm font-bold text-white">登入</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
